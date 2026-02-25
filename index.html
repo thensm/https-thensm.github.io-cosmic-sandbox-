@@ -1,0 +1,223 @@
+<!DOCTYPE html>
+<html lang="en">
+<head>
+<meta charset="UTF-8">
+<title>Cosmic Sandbox 3D</title>
+<style>
+body{margin:0; overflow:hidden; font-family:Arial;}
+#menu{
+position:absolute; top:0; left:0; width:100%; height:100%; display:flex; flex-direction:column; justify-content:center; align-items:center;
+background:url('https://upload.wikimedia.org/wikipedia/commons/9/97/The_Earth_seen_from_Apollo_17.jpg') center/cover no-repeat;
+color:white; text-align:center;
+}
+#menu input,#menu select,#menu button{margin:5px;padding:6px;width:200px;font-size:14px;}
+#ui{
+position:absolute; top:10px; left:10px; background:rgba(0,0,0,0.85); padding:12px; border-radius:6px; width:280px; color:white; font-size:12px;
+box-shadow:0 0 10px rgba(255,255,255,0.2); display:none;
+}
+#inspector{margin-top:10px; padding-top:10px; border-top:1px solid #444;}
+</style>
+</head>
+<body>
+
+<div id="menu">
+<h1>Cosmic Sandbox 3D</h1>
+<p>god i hate this school... :P</p>
+<p>Enter your planet parameters:</p>
+Mass (kg): <input type="number" id="inputMass" value="5.97e24"><br>
+Radius (m): <input type="number" id="inputRadius" value="6371000"><br>
+Type:
+<select id="inputType">
+<option value="planet">Planet</option>
+<option value="star">Star</option>
+<option value="blackhole">Black Hole</option>
+</select><br>
+<button id="startBtn">Play / Start Simulation</button>
+</div>
+
+<div id="ui">
+<div id="inspector">Click object to inspect</div>
+<button onclick="spawnTyped()">Spawn Typed Object</button>
+<button onclick="spawnOrbit()">Spawn Orbit Planet</button>
+<button onclick="clearAll()">Clear All</button>
+<button onclick="togglePause()">Pause / Resume</button>
+Graphics:
+<select id="graphics">
+<option value="low">Low</option>
+<option value="medium" selected>Medium</option>
+<option value="high">High</option>
+<option value="ultra">Ultra</option>
+</select>
+</div>
+
+<script src="https://cdn.jsdelivr.net/npm/three@0.155.0/build/three.min.js"></script>
+<script src="https://cdn.jsdelivr.net/npm/three@0.155.0/examples/js/controls/OrbitControls.js"></script>
+<script>
+// ============ SCENE SETUP ============
+let scene = new THREE.Scene();
+let camera = new THREE.PerspectiveCamera(60, window.innerWidth/window.innerHeight, 1, 1e10);
+camera.position.set(0,0,1500);
+let renderer = new THREE.WebGLRenderer({antialias:true});
+renderer.setSize(window.innerWidth, window.innerHeight);
+document.body.appendChild(renderer.domElement);
+
+// STARRY BACKGROUND
+function createStars(){
+    let geometry = new THREE.BufferGeometry();
+    let count = 2000;
+    let positions = [];
+    for(let i=0;i<count;i++){
+        positions.push((Math.random()-0.5)*5000);
+        positions.push((Math.random()-0.5)*5000);
+        positions.push((Math.random()-0.5)*5000);
+    }
+    geometry.setAttribute('position', new THREE.Float32BufferAttribute(positions,3));
+    let material = new THREE.PointsMaterial({color:0xffffff, size:1});
+    scene.add(new THREE.Points(geometry, material));
+}
+createStars();
+
+// LIGHT
+scene.add(new THREE.AmbientLight(0xffffff,0.2));
+let pointLight = new THREE.PointLight(0xffffff,1.5,0);
+scene.add(pointLight);
+
+// CONTROLS
+let controls = new THREE.OrbitControls(camera, renderer.domElement);
+
+// ============ OBJECTS & PHYSICS ============
+let objects=[];
+let paused=false;
+let selected=null;
+const G = 6.67430e-11;
+
+// utility functions
+function density(m,r){return m/((4/3)*Math.PI*r*r*r);}
+function escapeVelocity(m,r){return Math.sqrt((2*G*m)/r);}
+function schwarzschildRadius(m){return (2*G*m)/(299792458**2);}
+
+// create sphere
+function createSphere(type,r){
+    let colorMap=0x888888;
+    if(type=="star") colorMap=0xffff66;
+    if(type=="blackhole") colorMap=0x5500ff;
+    let geo = new THREE.SphereGeometry(r,16,16);
+    let mat = new THREE.MeshStandardMaterial({color:colorMap});
+    let mesh = new THREE.Mesh(geo, mat);
+    mesh.userData.trail = [];
+    return mesh;
+}
+
+// spawn typed object
+function spawnTyped(){
+    let m=parseFloat(document.getElementById("inputMass").value);
+    let r=parseFloat(document.getElementById("inputRadius").value)*1e-6;
+    let t=document.getElementById("inputType").value;
+    let mesh = createSphere(t,r);
+    mesh.position.set((Math.random()-0.5)*200,(Math.random()-0.5)*200,(Math.random()-0.5)*200);
+    mesh.userData = {mass:m,radius:r*1e6,type:t,v:new THREE.Vector3(),trail:[]};
+    scene.add(mesh);
+    objects.push(mesh);
+}
+
+// basic orbit
+function spawnOrbit(){
+    if(objects.length==0) return;
+    let center = objects[0];
+    let dist = 200;
+    let v = Math.sqrt(G*center.userData.mass/dist);
+    let mesh = createSphere("planet",6.371);
+    mesh.position.set(center.position.x+dist,center.position.y,center.position.z);
+    mesh.userData={mass:5.97e24,radius:6371000,type:"planet",v:new THREE.Vector3(0,v,0),trail:[]};
+    scene.add(mesh);
+    objects.push(mesh);
+}
+
+// clear
+function clearAll(){
+    objects.forEach(o=>scene.remove(o));
+    objects=[];
+    selected=null;
+}
+
+// pause
+function togglePause(){paused=!paused;}
+
+// raycaster for selecting objects
+let raycaster = new THREE.Raycaster();
+let mouse = new THREE.Vector2();
+window.addEventListener('click',(e)=>{
+    mouse.x = (e.clientX/window.innerWidth)*2-1;
+    mouse.y = -(e.clientY/window.innerHeight)*2+1;
+    raycaster.setFromCamera(mouse,camera);
+    let intersects = raycaster.intersectObjects(objects);
+    if(intersects.length>0){selected=intersects[0].object; updateInspector();}
+});
+
+function updateInspector(){
+    let inspector = document.getElementById("inspector");
+    if(!selected){inspector.innerHTML="Click object to inspect"; return;}
+    let o = selected.userData;
+    inspector.innerHTML=
+        "type: "+o.type+"<br>"+
+        "mass: "+o.mass.toExponential(2)+" kg<br>"+
+        "radius: "+o.radius.toExponential(2)+" m<br>"+
+        "density: "+density(o.mass,o.radius).toExponential(2)+" kg/m³<br>"+
+        "escape velocity: "+escapeVelocity(o.mass,o.radius).toExponential(2)+" m/s";
+}
+
+// ============ TRAILS ============
+function drawTrails(){
+    objects.forEach(o=>{
+        let trailGeo = new THREE.BufferGeometry();
+        o.userData.trail.push(o.position.clone());
+        if(o.userData.trail.length>60) o.userData.trail.shift();
+        let positions = [];
+        o.userData.trail.forEach(p=>positions.push(p.x,p.y,p.z));
+        trailGeo.setAttribute('position',new THREE.Float32BufferAttribute(positions,3));
+        let trailMat = new THREE.LineBasicMaterial({color:0xffffff});
+        let line = new THREE.Line(trailGeo,trailMat);
+        scene.add(line);
+        setTimeout(()=>scene.remove(line),16);
+    });
+}
+
+// ============ SIMULATION PHYSICS ============
+function simulate(){
+    if(paused) return;
+    let dt = 1;
+    for(let i=0;i<objects.length;i++){
+        let a = objects[i];
+        for(let j=i+1;j<objects.length;j++){
+            let b = objects[j];
+            let dir = new THREE.Vector3().subVectors(b.position,a.position);
+            let distSq = dir.lengthSq()+1e-2;
+            let force = G*a.userData.mass*b.userData.mass/distSq;
+            dir.normalize();
+            let aAcc = dir.clone().multiplyScalar(force/a.userData.mass*dt);
+            let bAcc = dir.clone().multiplyScalar(-force/b.userData.mass*dt);
+            a.userData.v.add(aAcc);
+            b.userData.v.add(bAcc);
+        }
+    }
+    objects.forEach(o=>{o.position.add(o.userData.v.clone().multiplyScalar(dt));});
+    drawTrails();
+}
+
+// ============ START SIM ============
+document.getElementById("startBtn").onclick=function(){
+    document.getElementById("menu").style.display="none";
+    document.getElementById("ui").style.display="block";
+}
+
+// ============ ANIMATION LOOP ============
+function animate(){
+    requestAnimationFrame(animate);
+    simulate();
+    controls.update();
+    renderer.render(scene,camera);
+}
+animate();
+</script>
+</body>
+</html>
